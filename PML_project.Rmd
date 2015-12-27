@@ -1,0 +1,165 @@
+#PML Course Project
+#12/2015
+
+#Ultimately, the goal of the project is to predict the 'classe' of the exercise in the test dataset. 
+#First, set up working directory locally.
+getwd()
+setwd("~/Downloads")
+
+#Load relevant libraries
+library(AppliedPredictiveModeling)
+library(caret)
+library(rattle)
+library(randomForest)
+
+#Get file
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "training.csv", method = "curl")
+
+dateDownloaded <- date()
+
+#I retroactively adjusted the NA strings, based on initial exploration done below.
+TrainDF <- read.csv("training.csv", header=TRUE, stringsAsFactors = FALSE, na.strings=c("NA","#DIV/0!", ""))
+	names(TrainDF)
+	
+	#Find and replace all the misspelled instances of 'pitch'
+	grep("picth", names(TrainDF), value = FALSE) 
+	gsub("picth", "pitch", names(TrainDF))
+	
+#Some initial exploration - Get some background info on this dataset before determining a strategy.
+
+dim(TrainDF)
+
+#Sensors were at belt, arm, dumbbell, forearm, 
+#Measuring roll, pitch, yaw, total acceleration, 
+#kurtosis, skewness, max and min, amplitude, variance, 
+#gyros x, y, z, acceleration x, y, z, magnet x, y, z
+
+table(TrainDF$user_name)
+	#All users have >2600 examples
+
+table(TrainDF$user_name, TrainDF$classe)
+	#Various examples of the different classes; all users have >400 examples of each class
+
+#But many variables are zero, or NA. Remove variables with near zero variance
+TrainDF2 <- TrainDF[,colSums(is.na(TrainDF)) == 0]
+	str(TrainDF2)
+	#60 variables left
+		ncol(TrainDF2)
+	
+#Remove uninformative variables like timestamps
+TrainDF3 <- TrainDF2[,8:ncol(TrainDF2)]	
+	str(TrainDF3)
+	#53 left. 
+	
+	
+#Split dataset 75/25 for validation before testing, using the edited dataframe TrainDF3
+
+set.seed(1000)
+Training <- createDataPartition(TrainDF3$classe, p = .75, list = FALSE)
+	str(Training)
+#Create a training dataset
+TrainDF_Split <- TrainDF3[Training,]
+	class(TrainDF_Split$classe)
+	TrainDF_Split$classe <- factor(TrainDF_Split$classe)
+	nrow(TrainDF_Split)
+	names(TrainDF_Split)
+	str(TrainDF_Split)
+#Create a probe dataset to estimate out of sample error, before the true test	sample of 20 cases.
+TestDF_Split <- TrainDF3[-Training,]
+	TestDF_Split$classe <- factor(TestDF_Split$classe)
+
+##########
+#Closer look at Train datset
+#Scatterplot of belt data. Not v informative at this stage. 
+featurePlot(x = TrainDF_Split[,8:11], 
+			y = TrainDF_Split$classe, 
+			plot = "pairs")
+			
+#Density plot with scales - belt data		
+featurePlot(x = TrainDF_Split[,8:11], 
+			y = factor(TrainDF_Split$classe), 
+			plot = "density",
+			scales = list(x = list(relation="free"),
+                       y = list(relation="free")),
+                  adjust = 1.5,
+                  pch = "|",
+                  layout = c(4, 1),
+                  auto.key = list(columns = 3))
+                  
+#Density plot with scales - arm data		
+featurePlot(x = TrainDF_Split[,46:49], 
+			y = factor(TrainDF_Split$classe), 
+			plot = "density",
+			scales = list(x = list(relation="free"),
+                       y = list(relation="free")),
+                  adjust = 1.5,
+                  pch = "|",
+                  layout = c(4, 1),
+                  auto.key = list(columns = 3))
+
+
+#project is to predict the manner in which they did the exercise. 
+
+##########
+#All predictors are integers or numeric
+#Random forests don't handle missing values in predictors. I retroactively removed difficult variables at the data import stage.
+ 	table(TrainDF_Split$classe, exclude = NULL) 
+  
+ 	 # Since the variables' distributions vary so much, and there are 5 outcomes, I'll try a Random forest model
+ 	 # Using training set
+	   RF1 = randomForest(classe ~ ., data=TrainDF_Split, method="class")
+	   
+	   predictRF1 <- predict(RF1, data=TrainDF_Split, type="class") 
+	   confusionMatrix(predictRF1, TrainDF_Split$classe)
+	   
+# Evaluate the performance of the Random Forest model on the training set
+	#.995
+
+#Try on the validation set
+	RF2 = randomForest(classe ~ ., data=TestDF_Split, method="class")
+
+	   predictRF3 <- predict(RF1, newdata = TestDF_Split, type = "response")
+	   table(predictRF3)
+	   confusionMatrix(predictRF3, TestDF_Split$classe)
+	   
+# Evaluate the performance of the Random Forest model on the validation set
+	#.9961
+	
+#The in-sample error was .005, and the out-of-sample error was .0039, so I can optimistically estimate an out of sample error around .004
+
+	
+#Predict novel test set
+#Load test set and adjust the predictors, same as on training set
+test <- read.csv("pml-testing.csv", header = TRUE, stringsAsFactors=FALSE, na.strings=c("NA","#DIV/0!", ""))
+
+	#Find and replace all the misspelled instances of pitch
+	grep("picth", names(TrainDF), value = FALSE) 
+	gsub("picth", "pitch", names(TrainDF))
+
+	#Remove all columns that were removed from training set, TrainDF3, and subset test set to a new df, test_sub
+	namelist <- names(TrainDF3)
+		str(namelist)
+	
+	col.num <- which(colnames(test) %in% namelist)
+		col.num
+	test_sub <- test[,col.num]
+	
+		str(test_sub)
+#Use the model on the new test data; print results
+predict.test <- predict(RF1, newdata = test_sub, type = "response")	
+	table(predict.test)
+	predict.test
+# 1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 
+# B  A  B  A  A  E  D  B  A  A  B  C  B  A  E  E  A  B  B  B 	
+
+###
+#Function to generate files with predictions to submit for assignment
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predict.test)
